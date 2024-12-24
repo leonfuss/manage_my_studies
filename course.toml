@@ -1,0 +1,19 @@
+# Both short_name and name can be used as a COURSE_REF
+name = "COURSE_NAME"
+long_name = "LONG_COURSE_NAME"
+# module_id in the course catalog
+# eg. "INF-324"
+# module_id = "MODULE_ID"
+#
+# Uncomment if exercises should be enabled
+# exercises = true
+#
+# Uncomment if course was taken at another university
+# Only write the city name in English.
+# eg. "Tuebingen", "Uppsala", "Florence", "Glasgow"
+# university = "UNIVERSITY_NAME"
+#
+# Uncomment if course does not correspond to the study cycle it is
+# listed under semester
+# eg. "Bachelor", "Master", "Doctorate"
+# study_cycle = "STUDY_CYCLE"

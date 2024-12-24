@@ -1,0 +1,17 @@
+[package]
+name = "uniman"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.95"
+clap = { version = "4.5.23", features = ["derive"] }
+clap_complete = "4.5.40"
+dirs = "5.0.1"
+serde = "1.0.216"
+toml_edit = { version = "0.22.22", features = ["serde"] }
+walkdir = "2.5.0"
