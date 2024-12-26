@@ -1,155 +1,93 @@
-use std::path::PathBuf;
+use crate::{store::Store, CourseCommands};
+use anyhow::{anyhow, Context, Result};
 
-use crate::{config::Config, CourseCommands};
-use anyhow::{bail, Context, Result};
-use walkdir::WalkDir;
-
-pub fn handle_course(config: &mut Config, command: Option<CourseCommands>) -> Result<()> {
+pub fn course(store: &mut Store, command: Option<CourseCommands>) -> Result<()> {
     let command = command.unwrap_or(CourseCommands::List);
     match command {
-        CourseCommands::List => list_courses(config),
-        CourseCommands::Add { name } => add_course(config, name),
-        CourseCommands::Remove { name } => remove_course(config, name),
-        CourseCommands::Move { from, to } => move_course(config, from, to),
+        CourseCommands::List => list(store),
+        CourseCommands::Add { name } => add(store, name),
+        CourseCommands::Remove { name } => remove(store, name),
+        CourseCommands::Move { to, from } => from_to(store, to, from),
     }
 }
 
-fn list_courses(config: &Config) -> Result<()> {
-    let active_semester = config
+fn list(store: &Store) -> Result<()> {
+    let semester = store
         .active_semester()
-        .ok_or_else(|| anyhow::anyhow!("An active semester is required to list courses"))?;
+        .ok_or_else(|| anyhow!("No active semester"))?;
 
-    let courses = get_course(active_semester.path());
-    if courses.is_empty() {
-        println!("No courses found for the active semester.");
-    } else {
-        for course in courses {
-            if let Some(active_course) = config.active_course() {
-                if course.name == active_course.name {
-                    print!("* ");
-                } else {
-                    print!("  ");
-                }
-            } else {
-                print!("  ");
-            }
-            println!("{} - {}", course.name, course.long_name);
+    let mut run = false;
+    for course in semester.courses() {
+        run = true;
+        if semester.is_active(&course) {
+            print!("*");
+        } else {
+            print!(" ");
         }
+        println!("{}", course.name());
+    }
+    if !run {
+        println!("No courses found");
     }
     Ok(())
 }
 
-fn add_course(config: &Config, name: String) -> Result<()> {
-    let active_semester = config
+fn add(store: &Store, name: String) -> Result<()> {
+    let semester = store
         .active_semester()
-        .ok_or_else(|| anyhow::anyhow!("An active semester is required to add a course"))?;
+        .ok_or_else(|| anyhow!("No active semester"))?;
 
-    let path = active_semester.path().join(&name);
-
-    if path.exists() {
-        bail!("Course with same name already exists");
-    }
-
-    std::fs::create_dir_all(&path)
-        .with_context(|| format!("Failed to create course folder at: {}", path.display()))?;
-
-    let course_toml_path = path.join(".course.toml");
-    std::fs::write(&course_toml_path, include_str!("../course.toml")).with_context(|| {
-        format!(
-            "Failed to create .course.toml file at: {}",
-            course_toml_path.display()
-        )
-    })
+    let course = semester.add_course(&name)?;
+    println!("Added course: {}", course.name());
+    Ok(())
 }
 
-fn remove_course(config: &Config, name: String) -> Result<()> {
-    let active_semester = config
-        .active_semester()
-        .ok_or_else(|| anyhow::anyhow!("An active semester is required to remove a courses"))?;
+fn remove(store: &mut Store, name: String) -> Result<()> {
+    let semester = store
+        .active_semester_mut()
+        .ok_or_else(|| anyhow!("No active semester"))?;
 
-    // Ask for confirmation before removal
-    println!(
-        "Are you sure you want to remove the course '{}/{}'? (y/N)",
-        active_semester, name
-    );
+    let course = semester
+        .get_course(&name)
+        .with_context(|| anyhow!("Course could not be found"))?;
+
+    use std::io::{self, Write};
+
+    print!("Do you really want to delete course '{}'? (y/N): ", name);
+    io::stdout().flush()?;
     let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    if input.trim().to_lowercase() == "y" {
-        let path = active_semester.path().join(&name);
-        if path.exists() {
-            std::fs::remove_dir_all(&path)?;
-            println!("Removed course: {}", name);
-        } else {
-            bail!("Course '{}' does not exist", name);
-        }
-    } else {
+    io::stdin().read_line(&mut input)?;
+    if input.trim().to_lowercase() != "y" {
         println!("Aborted removal of course: {}", name);
+        return Ok(());
     }
+
+    semester.remove_course(course)?;
+    println!("Removed course: {}", name);
     Ok(())
 }
 
-fn move_course(config: &Config, from: Option<String>, to: String) -> Result<()> {
-    let active_semester = config
-        .active_semester()
-        .ok_or_else(|| anyhow::anyhow!("An active semester is required to move a courses"))?;
+fn from_to(store: &mut Store, to: String, from: Option<String>) -> Result<()> {
+    let semester = store
+        .active_semester_mut()
+        .ok_or_else(|| anyhow!("No active semester"))?;
+    let from_course = from.unwrap_or_else(|| {
+        semester
+            .active()
+            .map(|course| course.name().to_string())
+            .unwrap_or_else(|| anyhow!("No active course").to_string())
+    });
 
-    let course = match (from, config.active_course()) {
-        (Some(from), _) => from,
-        (None, Some(active_course)) => active_course.name,
-        (None, None) => bail!("An active course or a 'from' course is required to move a course"),
-    };
+    let from_course = semester
+        .get_course(&from_course)
+        .with_context(|| anyhow!("FROM ({}) could not be found", from_course))?;
 
-    let from_path = active_semester.path().join(&course);
-    let to_path = active_semester.path().join(&to);
-
-    if !from_path.exists() {
-        bail!("The course '{}' does not exist", course);
-    }
-
-    if to_path.exists() {
-        bail!("A course with the name '{}' already exists", to);
-    }
-
-    std::fs::rename(&from_path, &to_path)
-        .with_context(|| format!("Failed to move course from '{}' to '{}'", course, to))?;
-    println!("Moved course from '{}' to '{}'", course, to);
+    semester.move_course(from_course, &to)?;
+    println!(
+        "Course {} was sucessful moved to {}/{}",
+        semester.name(),
+        semester.name(),
+        to
+    );
     Ok(())
-}
-
-fn get_course(semester_entry: &PathBuf) -> Vec<Course> {
-    let mut courses = WalkDir::new(semester_entry)
-        .min_depth(1)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_dir())
-        .filter_map(|entry| Course::from_path(entry.path().to_path_buf()))
-        .collect::<Vec<Course>>();
-    courses.sort_by(|a, b| a.name.cmp(&b.name));
-    courses
-}
-
-pub struct Course {
-    name: String,
-    long_name: String,
-}
-
-impl Course {
-    pub fn from_path(path: PathBuf) -> Option<Course> {
-        let name = path.file_name()?.to_str()?.to_string();
-        let course_toml_path = path.join(".course.toml");
-        let long_name = if course_toml_path.exists() {
-            let content = std::fs::read_to_string(course_toml_path).ok()?;
-            let value = content.parse::<toml_edit::DocumentMut>().ok()?;
-            value.get("long_name")?.as_str()?.to_string()
-        } else {
-            println!("'course.toml' could not be found for {}", path.display());
-            String::new()
-        };
-        Some(Course { name, long_name })
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }

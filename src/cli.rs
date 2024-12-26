@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "mm")]
-#[command(about = "Manage my studies")]
+#[command(about = "Manage my studies", version = "0.1.0")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -12,22 +12,31 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    #[command(about = "Show the current active semester or course")]
+    #[command(alias = "s")]
     Status {},
-    Switch {
-        reference: Option<String>,
-    },
+    #[command(about = "Switch to a semester or course")]
+    #[command(alias = "sw")]
+    Switch { reference: Option<String> },
+    #[command(about = "Manage semesters")]
+    #[command(alias = "se")]
     Semester {
         #[command(subcommand)]
         command: Option<SemesterCommands>,
     },
+    #[command(about = "Manage courses")]
+    #[command(alias = "co")]
     Course {
         #[command(subcommand)]
         command: Option<CourseCommands>,
     },
+    #[command(about = "exercises")]
+    #[command(alias = "ex")]
     Exercise {
         #[command(subcommand)]
         command: ExerciseCommands,
     },
+    #[command(about = "Chnage configuration (to be implemented)")]
     Config {
         #[command(subcommand)]
         command: Option<ConfigCommands>,
@@ -104,14 +113,6 @@ impl StudyCycle {
             StudyCycle::Bachelor => "b",
             StudyCycle::Master => "m",
             StudyCycle::Doctorate => "d",
-        }
-    }
-
-    pub fn to_base(&self) -> u16 {
-        match self {
-            StudyCycle::Bachelor => 100,
-            StudyCycle::Master => 200,
-            StudyCycle::Doctorate => 300,
         }
     }
 }

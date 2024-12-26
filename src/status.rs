@@ -1,21 +1,13 @@
-use crate::config::Config;
+use crate::store::Store;
 use anyhow::Result;
 
-pub fn handle_status(config: &Config) -> Result<()> {
-    match (config.active_semester(), config.active_course()) {
-        (Some(active_semester), Some(active_course)) => {
-            println!(
-                "On course: {}/{}",
-                active_semester.file_name(),
-                active_course.name()
-            );
-        }
-        (Some(active_semseter), None) => {
-            println!("On semester: {}", active_semseter);
-        }
-        _ => {
-            println!("No active semester or course set");
-        }
+pub fn status(store: &Store) -> Result<()> {
+    match store.active_semester() {
+        Some(semester) => match semester.active() {
+            Some(course) => println!("Active on course: {}/{}", semester.name(), course.name()),
+            None => println!("Active on: {}/", semester.name()),
+        },
+        None => println!("No active semester or course"),
     }
     Ok(())
 }
