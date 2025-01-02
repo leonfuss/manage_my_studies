@@ -1,96 +1,46 @@
-use std::path::PathBuf;
+use std::{
+    ops::Deref,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{anyhow, Context, Result};
 use either::Either;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::{util, StudyCycle};
+use crate::{course::Course, semester::Semester, StudyCycle};
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Store {
+    #[serde(skip)]
+    #[serde(default)]
     entry_point: PathBuf,
-    active_semester: Option<Semester>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Semester {
-    semester_number: u16,
-    cycle: StudyCycle,
-    path: PathBuf,
-    active_course: Option<Course>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Course {
-    name: String,
-    path: PathBuf,
+    active_semester: Option<String>,
 }
 
 impl Store {
     pub fn new(entry_point: PathBuf) -> Result<Store> {
         if !entry_point.exists() {
-            return Err(anyhow::anyhow!("Store path does not exist"));
+            return Err(anyhow!("Store path does not exist"));
         }
-        let data_file = entry_point.join(".mm");
-        let active_semester = Store::get_active_semester_from_file(&data_file)?.and_then(|name| {
-            match Store::_get_semester(&name, &entry_point) {
-                Ok(semester) => Some(semester),
-                Err(e) => {
-                    eprintln!("Failed to load active semester: {}", e);
-                    None
-                }
-            }
-        });
 
-        let store = Store {
-            entry_point,
-            active_semester,
-        };
-        Ok(store)
+        let file = entry_point.store_data_file();
+        file.ensure_exists()?;
+        file.read()
     }
 
-    pub fn active_semester(&self) -> Option<&Semester> {
-        self.active_semester.as_ref()
-    }
-
-    pub fn active_semester_mut(&mut self) -> Option<&mut Semester> {
-        self.active_semester.as_mut()
-    }
-
-    fn get_active_semester_from_file(path: &PathBuf) -> Result<Option<String>> {
-        util::enusure_file_exists(path)?;
-        let toml = util::toml_from_path(path)?;
-        let semester = toml
-            .get("semester")
-            .and_then(|it| it.as_str())
-            .map(String::from);
-        Ok(semester)
-    }
-
-    fn _get_semester(name: &str, entry_point: &PathBuf) -> Result<Semester> {
-        let path = entry_point.join(name);
-        if !path.exists() {
-            return Err(anyhow::anyhow!("Semester '{}' does not exist", name));
+    pub fn active_semester(&self) -> Option<Semester> {
+        if let Some(ref name) = self.active_semester {
+            self.get_semester(name).ok()
+        } else {
+            None
         }
-        let (cycle, number) = match name
-            .chars()
-            .next()
-            .ok_or_else(|| anyhow!("Semester name is empty"))?
-        {
-            'b' => (StudyCycle::Bachelor, &name[1..]),
-            'm' => (StudyCycle::Master, &name[1..]),
-            'd' => (StudyCycle::Doctorate, &name[1..]),
-            _ => return Err(anyhow::anyhow!("Invalid semester name '{}'", name)),
-        };
-        let number = number.parse::<u16>().with_context(|| {
-            anyhow!(
-                "Failed to parse number: {} in semester name {}",
-                number,
-                name
-            )
-        })?;
-        let semester = Semester::new(path, number, cycle)?;
-        Ok(semester)
+    }
+}
+
+impl Store {
+    pub fn get_semester(&self, name: &str) -> Result<Semester> {
+        Semester::new(self.entry_point.join(name))
     }
 
     pub fn semesters(&self) -> impl Iterator<Item = Semester> + '_ {
@@ -101,10 +51,7 @@ impl Store {
             .into_iter()
             .filter_map(|entry| entry.ok())
             .filter(|entry| self.is_semester(entry.path()))
-            .filter_map(|entry| {
-                let name = entry.file_name().to_string_lossy().to_string();
-                Store::_get_semester(&name, &self.entry_point).ok()
-            })
+            .filter_map(|entry| Semester::new(entry.path()).ok())
     }
 
     fn is_semester<P>(&self, path: P) -> bool
@@ -125,10 +72,6 @@ impl Store {
         }
     }
 
-    pub fn get_semester(&self, name: &str) -> Option<Semester> {
-        Store::_get_semester(name, &self.entry_point).ok()
-    }
-
     pub fn get_by_reference(
         &self,
         reference: &str,
@@ -137,29 +80,28 @@ impl Store {
         match split.len() {
             0 => return None,
             1 => {
-                if let Some(semester) = self.get_semester(reference) {
+                if let Ok(semester) = self.get_semester(reference) {
                     return Some(Either::Left(semester));
                 } else {
-                    if let Some(active_semester) = &self.active_semester {
+                    if let Some(active_semester) = self.active_semester() {
                         return active_semester
                             .get_course(reference)
                             .ok()
-                            .map(|course| Either::Right((active_semester.clone(), course)));
+                            .map(|course| Either::Right((active_semester, course)));
                     };
 
                     self.semesters()
-                        .flat_map(|semester| {
-                            let semester_clone = semester.clone();
-                            semester
-                                .courses()
-                                .map(move |course| (semester_clone.clone(), course))
+                        .filter_map(|semester| {
+                            let course =
+                                semester.courses().find(|course| course.name() == reference);
+                            course.map(|course| (semester, course))
                         })
-                        .find(|(_, course)| course.name == reference)
                         .map(Either::Right)
+                        .next()
                 }
             }
             2 => {
-                let semester = self.get_semester(split[0])?;
+                let semester = self.get_semester(split[0]).ok()?;
                 let course = semester.get_course(split[1]).ok()?;
                 return Some(Either::Right((semester, course)));
             }
@@ -173,17 +115,17 @@ impl Store {
         cycle: Option<StudyCycle>,
     ) -> Result<Semester> {
         let cycle = cycle
-            .or_else(|| self.active_semester.as_ref().map(|it| it.study_cycle()))
+            .or_else(|| self.active_semester().map(|it| it.study_cycle()))
             .ok_or_else(|| {
                 anyhow!("A study cycle must be provided as currently no semester is active.")
             })?;
-        let name = Semester::file_name(cycle, semester_number);
+        let name = Semester::format_name(cycle, semester_number);
         let path = self.entry_point.join(&name);
         if path.exists() {
             return Err(anyhow!("Semester '{}' already exists", name));
         }
         std::fs::create_dir(&path)?;
-        Semester::new(path, semester_number, cycle)
+        Semester::new(path)
     }
 
     pub fn remove_semester(&mut self, semester: Semester) -> Result<()> {
@@ -195,172 +137,136 @@ impl Store {
     }
 
     pub fn is_active(&self, semester: &Semester) -> bool {
-        self.active_semester
-            .as_ref()
-            .map(|it| it.path == semester.path)
+        self.active_semester()
+            .map(|it| it.path() == semester.path())
             .unwrap_or(false)
     }
 
     pub fn set_active(&mut self, semester: Option<&Semester>) -> Result<()> {
-        self.active_semester = semester.cloned();
+        self.active_semester = semester.map(|it| it.name().to_owned());
         self.write()
     }
 
     fn write(&self) -> Result<()> {
-        let path = self.entry_point.join(".mm");
-        let mut data = util::toml_from_path(&path)?;
-        if let Some(ref semester) = self.active_semester {
-            data["semester"] = toml_edit::value(semester.name());
-        }
-        std::fs::write(&path, data.to_string())?;
-        Ok(())
+        let path = self.entry_point.store_data_file();
+        path.ensure_exists()?;
+        path.write(&self)
     }
 }
 
-impl Semester {
-    pub fn new(path: PathBuf, semester_number: u16, cycle: StudyCycle) -> Result<Semester> {
-        let data_path = path.join(".mm");
-        util::enusure_file_exists(&data_path)?;
-        let toml = util::toml_from_path(&data_path)?;
-        let active_course = toml
-            .get("course")
-            .and_then(|it| it.as_str())
-            .map(String::from)
-            .and_then(|name| {
-                let path = path.join(&name);
-                if path.exists() {
-                    Some(Course::new(path, name))
-                } else {
-                    None
-                }
-            });
+trait FileMarker {}
 
-        let semester = Semester {
-            semester_number,
-            path,
-            cycle,
-            active_course,
-        };
-        Ok(semester)
-    }
-    pub fn get_course(&self, name: &str) -> Result<Course> {
-        let path = self.path().join(name);
+pub struct StoreDataFile(PathBuf);
+pub struct SemesterDataFile(PathBuf);
+pub struct CourseDataFile(PathBuf);
+
+impl FileMarker for StoreDataFile {}
+impl FileMarker for SemesterDataFile {}
+impl FileMarker for CourseDataFile {}
+
+pub trait Files {
+    fn store_data_file(&self) -> StoreDataFile;
+    fn semester_data_file(&self) -> SemesterDataFile;
+    fn course_data_file(&self) -> CourseDataFile;
+}
+
+pub trait ReadWriteData {
+    type Object;
+    fn read(&self) -> Result<Self::Object>;
+    fn write(&self, object: &Self::Object) -> Result<()>;
+}
+
+pub trait EnsureExistance {
+    fn ensure_exists(&self) -> Result<()>;
+}
+
+impl<F> EnsureExistance for F
+where
+    F: Deref<Target = PathBuf> + FileMarker,
+{
+    fn ensure_exists(&self) -> Result<()> {
+        let path: &Path = self.deref().as_ref();
         if !path.exists() {
-            return Err(anyhow!("Course '{}' does not exist", name));
+            std::fs::write(path, "")
+                .with_context(|| anyhow!("Failed to create data file at: {}", path.display()))?;
         }
-        let course = Course::new(path, name.into());
-        Ok(course)
-    }
-
-    pub fn is_active(&self, coures: &Course) -> bool {
-        self.active_course
-            .as_ref()
-            .map(|it| it.path == coures.path)
-            .unwrap_or(false)
-    }
-
-    pub fn courses(&self) -> impl Iterator<Item = Course> + 'static {
-        WalkDir::new(&self.path)
-            .min_depth(1)
-            .max_depth(1)
-            .sort_by_file_name()
-            .into_iter()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_type().is_dir())
-            .filter_map(|entry| {
-                let name = entry.file_name().to_string_lossy().to_string();
-                Some(Course::new(entry.path().to_path_buf(), name))
-            })
-    }
-    pub fn add_course(&self, name: &str) -> Result<Course> {
-        let path = self.path().join(name);
-        if path.exists() {
-            return Err(anyhow!("Course '{}' already exists", name));
-        }
-
-        std::fs::create_dir(&path)?;
-        let course_toml_path = path.join(".course.toml");
-        std::fs::write(&course_toml_path, include_str!("../course.toml"))?;
-        let course = Course::new(path, name.into());
-        Ok(course)
-    }
-
-    pub fn remove_course(&mut self, course: Course) -> Result<()> {
-        if self.is_active(&course) {
-            self.active_course = None;
-        }
-        std::fs::remove_dir_all(course.path())?;
         Ok(())
-    }
-
-    pub fn move_course(&mut self, course: Course, to: &str) -> Result<Course> {
-        let to_path = self.path().join(&to);
-        if to_path.exists() {
-            return Err(anyhow!("A course with the name '{}' already exists", to));
-        }
-        std::fs::rename(course.path(), &to_path)?;
-        let new_course = Course::new(to_path, to.to_owned());
-        if self.is_active(&course) {
-            self.active_course = Some(new_course.clone());
-        }
-        Ok(new_course)
-    }
-    pub fn active(&self) -> Option<&Course> {
-        self.active_course.as_ref()
-    }
-    pub fn set_active(&mut self, course: Option<&Course>) -> Result<()> {
-        self.active_course = course.cloned();
-        self.write()
-    }
-
-    fn write(&self) -> Result<()> {
-        let path = self.path().join(".mm");
-        let mut data = util::toml_from_path(&path)?;
-        if let Some(ref course) = self.active_course {
-            data["course"] = toml_edit::value(course.name.clone());
-        }
-        std::fs::write(&path, data.to_string())?;
-        Ok(())
-    }
-
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-    pub fn study_cycle(&self) -> StudyCycle {
-        self.cycle
-    }
-
-    pub fn name(&self) -> String {
-        Semester::file_name(self.cycle, self.semester_number)
-    }
-    pub fn file_name(cycle: StudyCycle, semester_number: u16) -> String {
-        format!("{}{:02}", cycle.abbreviation(), semester_number)
     }
 }
 
-impl Course {
-    pub fn new(path: PathBuf, name: String) -> Course {
-        Course { path, name }
+impl ReadWriteData for StoreDataFile {
+    type Object = Store;
+
+    fn read(&self) -> Result<Self::Object> {
+        let content = std::fs::read_to_string(self.deref())
+            .with_context(|| anyhow!("Failed to read file at: {}", self.deref().display()))?;
+        let mut store: Store = toml_edit::de::from_str(&content).with_context(|| {
+            anyhow!(
+                "Failed to parse Store data from: {}",
+                self.deref().display()
+            )
+        })?;
+        store.entry_point = self.0.to_path_buf();
+        Ok(store)
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    fn write(&self, object: &Self::Object) -> Result<()> {
+        let data = toml_edit::ser::to_string(&object).with_context(|| {
+            anyhow!(
+                "Failed to serialize Store data to toml for: {}",
+                self.deref().display()
+            )
+        })?;
+        std::fs::write(self.deref(), data).with_context(|| {
+            anyhow!(
+                "Failed to write Store data to file: {}",
+                self.deref().display()
+            )
+        })?;
+        Ok(())
+    }
+}
+
+impl<P> Files for P
+where
+    P: AsRef<Path>,
+{
+    /// Should only be called on the entry point
+    fn store_data_file(&self) -> StoreDataFile {
+        StoreDataFile(self.as_ref().join(".mm"))
     }
 
-    pub fn path(&self) -> &PathBuf {
-        &self.path
+    /// Should only be called on a valid semester folder
+    fn semester_data_file(&self) -> SemesterDataFile {
+        SemesterDataFile(self.as_ref().join(".mm"))
     }
 
-    pub fn semester(&self, store: &Store) -> Result<Semester> {
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| anyhow!("Course path has no parent"))?;
-        let name = parent
-            .file_name()
-            .ok_or_else(|| anyhow!("Course path has no file name"))?
-            .to_string_lossy()
-            .to_string();
-        Store::_get_semester(&name, &store.entry_point)
+    /// Should only be called on a valid course folder
+    fn course_data_file(&self) -> CourseDataFile {
+        CourseDataFile(self.as_ref().join("course.toml"))
+    }
+}
+
+impl Deref for StoreDataFile {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for SemesterDataFile {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for CourseDataFile {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

@@ -1,5 +1,59 @@
-use crate::{store::Store, CourseCommands};
+use std::{
+    ops::Deref,
+    path::{Path, PathBuf},
+};
+
+use crate::{
+    semester::Semester,
+    store::{CourseDataFile, EnsureExistance, Files, ReadWriteData, Store},
+    CourseCommands,
+};
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Course {
+    grade: Option<f32>,
+    ects: Option<u8>,
+    #[serde(rename = "name")]
+    long_name: String,
+    #[serde(skip)]
+    name: String,
+    #[serde(skip)]
+    path: PathBuf,
+}
+
+impl ReadWriteData for CourseDataFile {
+    type Object = Course;
+    fn read(&self) -> Result<Self::Object> {
+        let content = std::fs::read_to_string(self.deref())
+            .with_context(|| anyhow!("Failed to read file at: {}", self.deref().display()))?;
+        let mut course: Course = toml_edit::de::from_str(&content).with_context(|| {
+            anyhow!(
+                "Failed to parse Course data from: {}",
+                self.deref().display()
+            )
+        })?;
+        course.path = (*self).to_path_buf();
+        Ok(course)
+    }
+
+    fn write(&self, object: &Self::Object) -> Result<()> {
+        let data = toml_edit::ser::to_string(&object).with_context(|| {
+            anyhow!(
+                "Failed to serialize Course data to toml for: {}",
+                self.deref().display()
+            )
+        })?;
+        std::fs::write(self.deref(), data).with_context(|| {
+            anyhow!(
+                "Failed to write Course data to file: {}",
+                self.deref().display()
+            )
+        })?;
+        Ok(())
+    }
+}
 
 pub fn course(store: &mut Store, command: Option<CourseCommands>) -> Result<()> {
     let command = command.unwrap_or(CourseCommands::List);
@@ -8,6 +62,41 @@ pub fn course(store: &mut Store, command: Option<CourseCommands>) -> Result<()> 
         CourseCommands::Add { name } => add(store, name),
         CourseCommands::Remove { name } => remove(store, name),
         CourseCommands::Move { to, from } => from_to(store, to, from),
+    }
+}
+
+impl Course {
+    pub fn new<P>(path: P) -> Result<Course>
+    where
+        P: AsRef<Path>,
+    {
+        let data = path.course_data_file();
+        data.ensure_exists()?;
+        let mut course = data.read()?;
+        course.name = path
+            .as_ref()
+            .file_name()
+            .ok_or_else(|| anyhow!("Course path has no file name"))?
+            .to_string_lossy()
+            .to_string();
+        course.path = path.as_ref().to_path_buf();
+        Ok(course)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
+    pub fn semester(&self) -> Result<Semester> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| anyhow!("Course path has no parent"))?;
+        Semester::new(&parent)
     }
 }
 
@@ -43,8 +132,8 @@ fn add(store: &Store, name: String) -> Result<()> {
 }
 
 fn remove(store: &mut Store, name: String) -> Result<()> {
-    let semester = store
-        .active_semester_mut()
+    let mut semester = store
+        .active_semester()
         .ok_or_else(|| anyhow!("No active semester"))?;
 
     let course = semester
@@ -68,8 +157,8 @@ fn remove(store: &mut Store, name: String) -> Result<()> {
 }
 
 fn from_to(store: &mut Store, to: String, from: Option<String>) -> Result<()> {
-    let semester = store
-        .active_semester_mut()
+    let mut semester = store
+        .active_semester()
         .ok_or_else(|| anyhow!("No active semester"))?;
     let from_course = from.unwrap_or_else(|| {
         semester

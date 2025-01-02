@@ -10,7 +10,6 @@ mod semester;
 mod status;
 mod store;
 mod switch;
-mod util;
 
 fn main() -> Result<()> {
     let config_path = config::get_config_path()?;

@@ -1,6 +1,7 @@
 use std::fmt;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(name = "mm")]
@@ -89,7 +90,7 @@ pub enum ConfigCommands {
     Remove { key: String },
 }
 
-#[derive(Debug, ValueEnum, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, ValueEnum, Clone, Copy, PartialEq, Eq)]
 pub enum StudyCycle {
     Bachelor,
     Master,

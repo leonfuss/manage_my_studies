@@ -1,6 +1,6 @@
 use std::env;
 
-use crate::store::Store;
+use crate::{course::Course, store::Store};
 use anyhow::{anyhow, Context, Result};
 use either::Either;
 
@@ -17,18 +17,18 @@ pub fn context_switch(store: &mut Store) -> Result<()> {
 
     while let Some(path) = current_path {
         if let Some(course) = find_course_in_path(store, path) {
-            let semester = course.semester(store)?;
+            let semester = course.semester()?;
             store.set_active(Some(&semester))?;
-            let active_semester = store.active_semester_mut().unwrap();
+            let mut active_semester = store.active_semester().unwrap();
             active_semester.set_active(Some(&course))?;
             println!("Switched to course: {}/{}", semester.name(), course.name());
             return Ok(());
         }
 
-        if let Some(semester) = store.get_semester(path.file_name().unwrap().to_str().unwrap()) {
+        if let Ok(semester) = store.get_semester(path.file_name().unwrap().to_str().unwrap()) {
             store.set_active(Some(&semester))?;
             println!("Switched to semester: {}", semester.name());
-            let active_semester = store.active_semester_mut().unwrap();
+            let mut active_semester = store.active_semester().unwrap();
             active_semester.set_active(None)?;
             return Ok(());
         }
@@ -41,7 +41,7 @@ pub fn context_switch(store: &mut Store) -> Result<()> {
     ))
 }
 
-fn find_course_in_path(store: &Store, path: &std::path::Path) -> Option<crate::store::Course> {
+fn find_course_in_path(store: &Store, path: &std::path::Path) -> Option<Course> {
     let course_name = path.file_name()?.to_str()?;
     store
         .semesters()
