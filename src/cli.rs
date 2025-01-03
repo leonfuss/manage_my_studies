@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(name = "mm")]
-#[command(about = "Manage my studies", version = "0.1.0")]
+#[command(about = "Manage my studies", version = "0.2.0")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -37,7 +37,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: ExerciseCommands,
     },
-    #[command(about = "Chnage configuration (to be implemented)")]
+    #[command(about = "Change configuration (to be implemented)")]
     Config {
         #[command(subcommand)]
         command: Option<ConfigCommands>,

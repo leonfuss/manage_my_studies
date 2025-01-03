@@ -1,6 +1,6 @@
 use std::env;
 
-use crate::{course::Course, store::Store};
+use crate::{course::Course, semester::Semester, store::Store};
 use anyhow::{anyhow, Context, Result};
 use either::Either;
 
@@ -13,41 +13,57 @@ pub fn switch(store: &mut Store, reference: Option<String>) -> Result<()> {
 
 pub fn context_switch(store: &mut Store) -> Result<()> {
     let env_exe = env::current_dir().context("Failed to retrieve current working directory")?;
-    let mut current_path = Some(env_exe.as_path());
 
-    while let Some(path) = current_path {
-        if let Some(course) = find_course_in_path(store, path) {
-            let semester = course.semester()?;
-            store.set_active(Some(&semester))?;
-            let mut active_semester = store.active_semester().unwrap();
-            active_semester.set_active(Some(&course))?;
-            println!("Switched to course: {}/{}", semester.name(), course.name());
-            return Ok(());
-        }
+    let w_dir = env_exe
+        .canonicalize()
+        .context("Failed to canonicalize current working directory")?;
 
-        if let Ok(semester) = store.get_semester(path.file_name().unwrap().to_str().unwrap()) {
-            store.set_active(Some(&semester))?;
-            println!("Switched to semester: {}", semester.name());
-            let mut active_semester = store.active_semester().unwrap();
-            active_semester.set_active(None)?;
-            return Ok(());
-        }
-
-        current_path = path.parent();
+    if w_dir == *store.entry_point() {
+        store.set_active(None)?;
+        return Ok(());
     }
 
-    Err(anyhow!(
-        "No semester or course found in the current environment"
-    ))
+    let index = w_dir
+        .ancestors()
+        .position(|anchestor| anchestor == store.entry_point())
+        .ok_or_else(|| {
+            anyhow!(
+                "No semester or course found in the current environment.\n The current working directory must be a subfolder of the entry point ({})",
+                store.entry_point().display()
+            )
+        })?;
+
+    if index == 1 {
+        let mut semester = Semester::new(&w_dir)?;
+        store.set_active(Some(&semester))?;
+        semester.set_active(None)?;
+        return Ok(());
+    }
+
+    if index >= 2 {
+        let semester_path = w_dir.ancestors().nth(index - 1).ok_or_else(|| {
+            anyhow!(
+                "Failed to access path anchestor at index: {}\npath:{}",
+                index,
+                w_dir.display()
+            )
+        });
+        let mut semester = Semester::new(&semester_path?)?;
+        store.set_active(Some(&semester))?;
+        let course_path = w_dir.ancestors().nth(index - 2).ok_or_else(|| {
+            anyhow!(
+                "Failed to access path anchestor at index: {}\npath:{}",
+                index,
+                w_dir.display()
+            )
+        })?;
+        let course = Course::new(course_path)?;
+        semester.set_active(Some(&course))?;
+    }
+
+    Ok(())
 }
 
-fn find_course_in_path(store: &Store, path: &std::path::Path) -> Option<Course> {
-    let course_name = path.file_name()?.to_str()?;
-    store
-        .semesters()
-        .flat_map(|semester| semester.get_course(course_name).ok())
-        .next()
-}
 pub fn ref_switch(store: &mut Store, reference: String) -> Result<()> {
     match store.get_by_reference(&reference) {
         Some(it) => match it {

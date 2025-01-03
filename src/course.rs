@@ -13,14 +13,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Course {
-    grade: Option<f32>,
-    ects: Option<u8>,
     #[serde(rename = "name")]
-    long_name: String,
+    long_name: Option<String>,
     #[serde(skip)]
     name: String,
     #[serde(skip)]
     path: PathBuf,
+    grade: Option<f32>,
+    ects: Option<u8>,
+    degrees: Option<Vec<String>>,
+    #[serde(rename = "übK")]
+    uebk: Option<bool>,
 }
 
 impl ReadWriteData for CourseDataFile {
@@ -89,6 +92,22 @@ impl Course {
 
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    pub fn ects(&self) -> Option<u8> {
+        self.ects
+    }
+
+    pub fn grade(&self) -> Option<f32> {
+        self.grade
+    }
+
+    pub fn uebk(&self) -> Option<bool> {
+        self.uebk
+    }
+
+    pub fn degrees(&self) -> impl Iterator<Item = String> + '_ {
+        self.degrees.iter().flatten().cloned()
     }
 
     pub fn semester(&self) -> Result<Semester> {

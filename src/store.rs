@@ -26,7 +26,9 @@ impl Store {
 
         let file = entry_point.store_data_file();
         file.ensure_exists()?;
-        file.read()
+        let mut store = file.read()?;
+        store.entry_point = entry_point;
+        Ok(store)
     }
 
     pub fn active_semester(&self) -> Option<Semester> {
@@ -35,6 +37,10 @@ impl Store {
         } else {
             None
         }
+    }
+
+    pub fn entry_point(&self) -> &PathBuf {
+        &self.entry_point
     }
 }
 
@@ -162,7 +168,6 @@ pub struct CourseDataFile(PathBuf);
 
 impl FileMarker for StoreDataFile {}
 impl FileMarker for SemesterDataFile {}
-impl FileMarker for CourseDataFile {}
 
 pub trait Files {
     fn store_data_file(&self) -> StoreDataFile;
@@ -194,19 +199,29 @@ where
     }
 }
 
+impl EnsureExistance for CourseDataFile {
+    fn ensure_exists(&self) -> Result<()> {
+        let path: &Path = self.deref().as_ref();
+        if !path.exists() {
+            std::fs::write(path, include_str!("../course.toml"))
+                .with_context(|| anyhow!("Failed to create data file at: {}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+
 impl ReadWriteData for StoreDataFile {
     type Object = Store;
 
     fn read(&self) -> Result<Self::Object> {
         let content = std::fs::read_to_string(self.deref())
             .with_context(|| anyhow!("Failed to read file at: {}", self.deref().display()))?;
-        let mut store: Store = toml_edit::de::from_str(&content).with_context(|| {
+        let store: Store = toml_edit::de::from_str(&content).with_context(|| {
             anyhow!(
                 "Failed to parse Store data from: {}",
                 self.deref().display()
             )
         })?;
-        store.entry_point = self.0.to_path_buf();
         Ok(store)
     }
 
