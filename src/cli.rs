@@ -49,7 +49,7 @@ pub enum SemesterCommands {
     List,
     Add {
         number: u16,
-        study_cycle: Option<StudyCycle>,
+        study_cycle: Option<StudyCycleDO>,
     },
     Remove {
         name: String,
@@ -66,12 +66,6 @@ pub enum CourseCommands {
     Remove {
         #[arg(value_name = "COURSE_NAME")]
         name: String,
-    },
-    Move {
-        #[arg(value_name = "TO")]
-        to: String,
-        #[arg(value_name = "FROM")]
-        from: Option<String>,
     },
 }
 
@@ -91,29 +85,19 @@ pub enum ConfigCommands {
 }
 
 #[derive(Debug, Serialize, Deserialize, ValueEnum, Clone, Copy, PartialEq, Eq)]
-pub enum StudyCycle {
+pub enum StudyCycleDO {
     Bachelor,
     Master,
     Doctorate,
 }
 
-impl fmt::Display for StudyCycle {
+impl fmt::Display for StudyCycleDO {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let cycle_str = match self {
-            StudyCycle::Bachelor => "Bachelor",
-            StudyCycle::Master => "Master",
-            StudyCycle::Doctorate => "Doctorate",
+            StudyCycleDO::Bachelor => "Bachelor",
+            StudyCycleDO::Master => "Master",
+            StudyCycleDO::Doctorate => "Doctorate",
         };
         write!(f, "{}", cycle_str)
-    }
-}
-
-impl StudyCycle {
-    pub fn abbreviation(&self) -> &'static str {
-        match self {
-            StudyCycle::Bachelor => "b",
-            StudyCycle::Master => "m",
-            StudyCycle::Doctorate => "d",
-        }
     }
 }

@@ -1,31 +1,23 @@
 use anyhow::Result;
 
-use clap::Parser;
-use cli::*;
-
 mod cli;
-mod config;
-mod course;
-mod semester;
-mod status;
-mod store;
-mod switch;
+mod domain;
+mod provider;
+mod service;
+
+use clap::Parser;
+use cli::Cli;
+use domain::{Config, Store};
+pub(crate) use provider::*;
+use service::Service;
 
 fn main() -> Result<()> {
-    let config_path = config::get_config_path()?;
-    let entry_point = config::get_entry_point(&config_path)?;
-
-    let mut store = store::Store::new(entry_point)?;
-
+    let config = Config::new()?;
+    let store = Store::new(config)?;
     let args = Cli::parse();
+    let mut service = Service::new(store);
 
-    match args.command {
-        Commands::Semester { command } => semester::semester(&mut store, command)?,
-        Commands::Switch { reference } => switch::switch(&mut store, reference)?,
-        Commands::Course { command } => course::course(&mut store, command)?,
-        Commands::Status {} => status::status(&store)?,
-        _ => {}
-    }
+    service.run(args)?;
 
     Ok(())
 }
