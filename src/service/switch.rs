@@ -1,9 +1,9 @@
 use std::env;
 
-use crate::StoreProvider;
-use anyhow::{anyhow, bail, Context, Result};
+use crate::{service::format::IntoFormatType, StoreProvider};
+use anyhow::{anyhow, bail, Context};
 
-use super::format::FormatService;
+use super::ServiceResult;
 
 pub(super) struct SwitchService<'s, Store>
 where
@@ -20,14 +20,14 @@ where
         SwitchService { store }
     }
 
-    pub fn run(&mut self, reference: Option<String>) -> Result<()> {
+    pub fn run(&mut self, reference: Option<String>) -> ServiceResult {
         match reference {
             Some(it) => self.reference_switch(it),
             None => self.context_switch(),
         }
     }
 
-    fn reference_switch(&mut self, reference: String) -> Result<()> {
+    fn reference_switch(&mut self, reference: String) -> ServiceResult {
         let split = reference.split('/').collect::<Vec<&str>>();
         match split.len() {
             0 => bail!("Invalid reference"),
@@ -35,8 +35,8 @@ where
                 // Check if reference is a semester
                 if let Some(semester) = self.store.get_semester(split[0]) {
                     self.store.set_current_semester(Some(&semester))?;
-                    FormatService::success(&format!("Switched to semester: {}", semester.name()));
-                    return Ok(());
+                    let msg = format!("Switched to semester: {}", semester.name()).success();
+                    return Ok(msg);
                 }
 
                 // Check if reference is a course in the active semester
@@ -44,12 +44,13 @@ where
                     if let Some(course) = active_semester.course(split[0]) {
                         self.store
                             .set_current_course(&mut active_semester, Some(&course))?;
-                        FormatService::success(&format!(
+                        let msg = format!(
                             "Switched to course: {}/{}",
                             active_semester.name(),
                             course.name()
-                        ));
-                        return Ok(());
+                        )
+                        .success();
+                        return Ok(msg);
                     }
                 }
 
@@ -63,12 +64,10 @@ where
                     {
                         self.store.set_current_semester(Some(&semester))?;
                         self.store.set_current_course(&mut semester, Some(course))?;
-                        FormatService::success(&format!(
-                            "Switched to course: {}/{}",
-                            semester.name(),
-                            course.name()
-                        ));
-                        return Ok(());
+                        let msg =
+                            format!("Switched to course: {}/{}", semester.name(), course.name())
+                                .success();
+                        return Ok(msg);
                     }
                     bail!("No semester found for course: {}", course.name());
                 }
@@ -92,13 +91,16 @@ where
                 self.store.set_current_semester(Some(&semester))?;
                 self.store
                     .set_current_course(&mut semester, Some(&course))?;
-                Ok(())
+
+                let msg =
+                    format!("Switched to course: {}/{}", semester.name(), course.name()).success();
+                Ok(msg)
             }
             _ => bail!("Please provide a valid reference"),
         }
     }
 
-    fn context_switch(&mut self) -> Result<()> {
+    fn context_switch(&mut self) -> ServiceResult {
         let env_exe = env::current_dir().context("Failed to retrieve current working directory")?;
         let entry = self.store.entry_point();
 
@@ -108,14 +110,14 @@ where
 
         if w_dir == *entry {
             self.store.set_current_semester(None)?;
-            return Ok(());
+            let msg = "Removed current active semester and course".success();
+            return Ok(msg);
         }
 
         let index = match w_dir.ancestors().position(|anchestor| anchestor == *entry) {
             Some(it) => it,
             None => {
-                FormatService::error(&format!("No semester or course found in the current environment.\n The current working directory must be a subfolder of the entry point ({})", entry.display()));
-                return Ok(());
+                bail!("No semester or course found in the current environment.\n The current working directory must be a subfolder of the entry point ({})", entry.display());
             }
         };
 
@@ -131,7 +133,9 @@ where
                 .get_semester(&name.to_string_lossy().to_string())
                 .ok_or_else(|| anyhow!("Current directory is not a subdirectory of a semester"))?;
             self.store.set_current_semester(Some(&semester))?;
-            return Ok(());
+
+            let msg = format!("Switched to semester: {}", semester.name()).success();
+            return Ok(msg);
         }
 
         if index >= 2 {
@@ -173,8 +177,11 @@ where
                 .ok_or_else(|| anyhow!("Current directory is not a subdirectory of a course"))?;
             self.store
                 .set_current_course(&mut semester, Some(&course))?;
-        }
 
-        Ok(())
+            let msg =
+                format!("Switched to course: {}/{}", semester.name(), course.name()).success();
+            return Ok(msg);
+        }
+        unreachable!()
     }
 }

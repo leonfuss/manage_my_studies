@@ -1,3 +1,6 @@
+#![feature(type_alias_impl_trait)]
+#![feature(int_roundings)]
+
 use anyhow::Result;
 
 mod cli;
@@ -17,7 +20,7 @@ fn main() -> Result<()> {
     let args = Cli::parse();
     let mut service = Service::new(store);
 
-    service.run(args)?;
+    service.run(args);
 
     Ok(())
 }

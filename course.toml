@@ -1,5 +1,5 @@
 # Both short_name and name can be used as a COURSE_REF
-name = "COURSE_NAME"
+# name = "COURSE_NAME"
 # ects = 6
 # grade = 1.3
 # degrees = ["B.Sc. Kogni", "B.Sc. Info"]

@@ -1,9 +1,16 @@
 use crate::{
-    cli::SemesterCommands, domain::StudyCycle, service::format::DialogEntry, StoreProvider,
+    cli::SemesterCommands,
+    domain::StudyCycle,
+    service::{
+        format::{DialogEntry, FormatAlignment, FormatService, IntoFormatType},
+        ServiceResult,
+    },
+    table, StoreProvider,
 };
-use anyhow::{anyhow, Context, Result};
 
-use super::format::{DialogOutput, FormatService};
+use anyhow::{anyhow, bail, Context};
+
+use super::format::DialogOutput;
 
 pub(super) struct SemesterService<'s, Store>
 where
@@ -20,7 +27,7 @@ where
         Self { store }
     }
 
-    pub fn run(&mut self, command: Option<SemesterCommands>) -> Result<()> {
+    pub fn run(&mut self, command: Option<SemesterCommands>) -> ServiceResult {
         let command = command.unwrap_or(SemesterCommands::List);
         match command {
             SemesterCommands::List => self.list(),
@@ -32,7 +39,7 @@ where
         }
     }
 
-    fn list(&self) -> Result<()> {
+    fn list(&self) -> ServiceResult {
         // Collect and sort semester names
         let mut semester_names: Vec<String> = self
             .store
@@ -42,51 +49,49 @@ where
         semester_names.sort();
 
         if semester_names.is_empty() {
-            FormatService::info("No semesters found");
-            return Ok(());
+            bail!("No semesters found!")
         }
 
-        // Find index of active semester
-        let active_idx = self.store.current_semester().and_then(|active_sem| {
-            semester_names
+        let res = if let Some(active_semester) = self.store.current_semester() {
+            let active = semester_names
                 .iter()
-                .position(|name| name == &active_sem.name())
-        });
+                .map(|course_name| {
+                    if course_name == &active_semester.name() {
+                        "*".to_string()
+                    } else {
+                        " ".to_string()
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        // Create active checker function
-        let is_active =
-            move |idx: usize| -> bool { active_idx.map_or(false, |active| idx == active) };
-
-        FormatService::active_item_table(semester_names, Box::new(is_active));
-        Ok(())
+            table!("active", "courses" ; active, semester_names ; FormatAlignment::Center, FormatAlignment::Left)
+        } else {
+            table!("courses"; semester_names; FormatAlignment::Left)
+        };
+        Ok(res)
     }
 
-    fn add(&mut self, number: u16, study_cycle: Option<StudyCycle>) -> Result<()> {
+    fn add(&mut self, number: u16, study_cycle: Option<StudyCycle>) -> ServiceResult {
         let study_cycle =
             study_cycle.or_else(|| self.store.current_semester().map(|it| it.study_cycle()));
         let Some(cycle) = study_cycle else {
-            FormatService::error(
-                "A study cycle must be provided as currently no semester is active.",
-            );
-            return Ok(());
+            bail!("A study cycle must be provided as currently no semester is active.");
         };
 
-        let path = match self.store.entry_point().create_semester_path(number, cycle) {
-            Ok(path) => path,
-            Err(e) => {
-                FormatService::error(&e.to_string());
-                return Ok(());
-            }
-        };
+        let path = self
+            .store
+            .entry_point()
+            .create_semester_path(number, cycle)?;
 
         // make sure everything is set up correctly
-        self.store
+        let sememester = self
+            .store
             .get_semester(path.name())
             .ok_or_else(|| anyhow!("Failed to retrieve newly created semester"))?;
-        Ok(())
+        Ok(format!("{} was created.", sememester.name()).success())
     }
 
-    fn remove(&mut self, name: String) -> Result<()> {
+    fn remove(&mut self, name: String) -> ServiceResult {
         let dialog = vec![
             DialogEntry::YesNoInput(format!("Are you sure that you want to permanently remove semester '{}' with all its courses? This action can not be reverted",name))
         ];
@@ -96,8 +101,7 @@ where
                 .first()
                 .ok_or_else(|| anyhow!("Dialog has not returned not the specified output"))?;
             let DialogOutput::YesNo(cond) = res else {
-                FormatService::error("Invalid input");
-                return Ok(());
+                bail!("Invalid Input")
             };
 
             if *cond {
@@ -106,14 +110,12 @@ where
                     .get_semester(&name)
                     .with_context(|| anyhow!("Semester could not be found"))?;
                 semester.path().clone().remove()?;
-                FormatService::success(&format!("Semester '{}' has been removed", name));
+                Ok(format!("Semester '{}' has been removed", name).success())
             } else {
-                FormatService::info("Operation has been canceled");
+                Ok("Operation has been canceled".info())
             }
         } else {
-            FormatService::info("Operation has been canceled");
+            Ok("Operation has been canceled".info())
         }
-
-        Ok(())
     }
 }

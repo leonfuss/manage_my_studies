@@ -1,6 +1,10 @@
-use crate::StoreProvider;
-use anyhow::Result;
+use crate::{
+    service::format::{FormatAlignment, IntoFormatType},
+    table, StoreProvider,
+};
 use std::collections::HashMap;
+
+use super::ServiceResult;
 
 pub(super) struct StatusService<'s, Store>
 where
@@ -17,38 +21,43 @@ where
         StatusService { store }
     }
 
-    pub fn run(&self) -> Result<()> {
+    pub fn run(&self) -> ServiceResult {
         self.status()
     }
 
-    fn status(&self) -> Result<()> {
-        match self.store.current_semester() {
+    fn status(&self) -> ServiceResult {
+        let acc = match self.store.current_semester() {
             Some(semester) => match semester.active_course() {
-                Some(course) => println!(
-                    "Active on course: {}/{}\n{:?}\n{:?}",
-                    semester.name(),
-                    course.name(),
-                    semester,
-                    course
-                ),
-                None => println!("Active on: {}/", semester.name()),
+                Some(course) => format!("Active on course: {}/{}", semester.name(), course.name(),),
+                None => format!("Active on: {}/", semester.name()),
             },
-            None => println!("No active semester or course"),
-        }
-        println!("== Performance == ");
-        println!("  Overall Average:          {:.2}", self.average());
-        println!("  Overall Weighted Average: {:.2}", self.weighted_average());
-        println!("  By Degree: ");
-        let weighted_averages = self.weighted_average_by_degree();
-        if weighted_averages.is_empty() {
-            println!("    No courses found");
-        } else {
-            for (degree, average) in weighted_averages {
-                println!("    {}: {:.2}", degree, average);
-            }
-        }
+            None => format!("No active semester or course"),
+        };
 
-        Ok(())
+        let header = "Performance".line();
+        let average = format!("{:.2}", self.average());
+        let weighted_average = format!("{:.2}", self.weighted_average());
+        let body = table!("Average", "Grade"; vec!["Overall".into(), "Weighted".into()], vec![average, weighted_average]; FormatAlignment::Left, FormatAlignment::Left);
+
+        let block_header = "By Degree".line();
+
+        let weighted_averages = self.weighted_average_by_degree();
+        let block_body = if weighted_averages.is_empty() {
+            "No courses found".line()
+        } else {
+            let degree = weighted_averages.keys().cloned().collect::<Vec<_>>();
+            let average = weighted_averages
+                .values()
+                .map(|f| format!("{:.2}", f))
+                .collect::<Vec<_>>();
+            table!("Degree", "Average"; degree, average; FormatAlignment::Left, FormatAlignment::Left)
+        };
+
+        let msg = acc
+            .line()
+            .chain(header.block(body.chain(block_header.block(block_body))));
+
+        Ok(msg)
     }
 
     // Unweighted average accross all degrees and course types (übK included) // Only coures with a defined grade are considered.

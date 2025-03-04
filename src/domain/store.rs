@@ -101,6 +101,7 @@ impl StoreProvider for Store {
             self.current_semester_link.link_from(semester.path())?;
         } else {
             self.current_semester_link.remove_link()?;
+            self.current_course_link.remove_link()?;
         }
         Ok(())
     }

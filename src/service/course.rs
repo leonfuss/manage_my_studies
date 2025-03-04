@@ -1,9 +1,11 @@
 use crate::domain::Course;
+use crate::service::format::FormatAlignment;
+use crate::table;
 use crate::{cli::CourseCommands, StoreProvider};
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, bail};
 
-use super::format::{DialogEntry, DialogOutput, FormatService};
+use super::format::{DialogEntry, DialogOutput, FormatService, IntoFormatType};
+use super::ServiceResult;
 
 pub(super) struct CourseService<'s, Store>
 where
@@ -20,7 +22,7 @@ where
         Self { store }
     }
 
-    pub fn run(&mut self, command: Option<CourseCommands>) -> Result<()> {
+    pub fn run(&mut self, command: Option<CourseCommands>) -> ServiceResult {
         let command = command.unwrap_or(CourseCommands::List);
         match command {
             CourseCommands::List => self.list(),
@@ -29,15 +31,16 @@ where
         }
     }
 
-    fn list(&self) -> Result<()> {
+    fn list(&self) -> ServiceResult {
         let semester = match self.store.current_semester() {
             Some(semester) => semester,
             None => {
-                FormatService::error("No active semester found");
-                FormatService::info(
-                    "An active semester is required in order to list the corresponding courses",
-                );
-                return Ok(());
+                let error = "No active semester found".error();
+                let info =
+                    "An active semester is required in order to list the corresponding courses"
+                        .info();
+
+                return Ok(error.chain(info));
             }
         };
 
@@ -48,47 +51,55 @@ where
         courses.sort();
 
         if courses.is_empty() {
-            FormatService::info("No courses found");
-            return Ok(());
+            let msg = "No courses found".info();
+            return Ok(msg);
         }
 
-        // Find index of active semester
-        let active_idx = self
-            .store
-            .current_semester()
-            .and_then(|active_sem| courses.iter().position(|name| name == &active_sem.name()));
+        let active_idx = self.store.current_semester().map(|active_sem| {
+            (&courses)
+                .iter()
+                .map(|course| {
+                    if course == &active_sem.name() {
+                        return "*".into();
+                    }
+                    return " ".into();
+                })
+                .collect()
+        });
 
-        // Create active checker function
-        let is_active =
-            move |idx: usize| -> bool { active_idx.map_or(false, |active| idx == active) };
-
-        FormatService::active_item_table(courses, Box::new(is_active));
-        Ok(())
+        let table = match active_idx {
+            Some(active) => {
+                table!("Active", "Courses"; active, courses; FormatAlignment::Right, FormatAlignment::Right)
+            }
+            None => table!("Courses"; courses; FormatAlignment::Right),
+        };
+        Ok(table)
     }
 
-    fn add(&mut self, name: String) -> Result<()> {
+    fn add(&mut self, name: String) -> ServiceResult {
         let semester = match self.store.current_semester() {
             Some(semester) => semester,
             None => {
-                FormatService::error("No active semester found");
-                FormatService::info("An active semester is required in order to add a new course");
-                return Ok(());
+                let error = "No active semester found".error();
+                let info = "An active semester is required in order to add a new course".info();
+                return Ok(error.chain(info));
             }
         };
 
         let course_path = semester.path().create_course_path(&name)?;
         // used to create course data file
         let _ = Course::from_path(course_path)?;
-        Ok(())
+        let msg = format!("Course '{}' has been added", name).success();
+        Ok(msg)
     }
 
-    fn remove(&mut self, name: String) -> Result<()> {
+    fn remove(&mut self, name: String) -> ServiceResult {
         let semester = match self.store.current_semester() {
             Some(semester) => semester,
             None => {
-                FormatService::error("No active semester found");
-                FormatService::info("An active semester is required in order to remove a course");
-                return Ok(());
+                let error = "No active semester found".error();
+                let info = "An active semester is required in order to remove a course".info();
+                return Ok(error.chain(info));
             }
         };
 
@@ -101,8 +112,7 @@ where
                 .first()
                 .ok_or_else(|| anyhow!("Dialog has not returned not the specified output"))?;
             let DialogOutput::YesNo(cond) = res else {
-                FormatService::error("Invalid input");
-                return Ok(());
+                bail!("Invalid input");
             };
 
             if *cond {
@@ -111,13 +121,13 @@ where
                     .ok_or_else(|| anyhow!("Course '{}' could not be found", name))?;
 
                 course.path().clone().remove()?;
-                FormatService::success(&format!("Semester '{}' has been removed", name));
+                let msg = format!("Semester '{}' has been removed", name).success();
+                return Ok(msg);
             } else {
-                FormatService::info("Operation has been canceled");
+                return Ok("Operation has been canceled".info());
             }
         } else {
-            FormatService::info("Operation has been canceled");
+            return Ok("Operation has been canceled".info());
         }
-        Ok(())
     }
 }
